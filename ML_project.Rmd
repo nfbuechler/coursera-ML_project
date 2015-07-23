@@ -1,0 +1,154 @@
+#Machine Learning Coursera Project
+##Project Goal
+Predict the manner in which 6 participants perform barbell lifts (correctly or incorrectly).The participants wore accelerometers on the belt, forearm, arm, and dumbell and were asked to perform the lifts correctly and incorrectly in 5 different ways.
+
+The outcome variable is the "classe" variable in the training set. A is a correct movement, B,C,D,E are incorrect movements.
+
+Questions this report will answer:  
+1) How I built my model
+2) How I used cross validation
+3) What I think the expected out of sample error is
+4) Why I made the choices I did 
+
+I will also use my prediction model to predict 20 different test cases.
+
+The project will be published in the form of an Rmarkdown file and the accompanying HTML file from Github.
+
+ 
+##Data
+The data came from this source: http://groupware.les.inf.puc-rio.br/har
+```{r}
+training_data <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testing_data <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training <- read.csv("training.csv")
+data <- training
+testing <- read.csv("testing.csv")
+```
+##Cross-validation setup
+The training data set is n=19622, we will use K-fold cross-validation in order to check the accuracy of the model.
+
+##test set
+lets make a factor of 40% of the data to use as an internal test set
+```{r}
+library(caret)
+set.seed(3333)
+inTrain <- createDataPartition(y=training$classe,p=0.6,list=FALSE)
+```
+
+##Feature Selection
+Now it is time to explore the predictors.
+```{r, echo=FALSE}
+names(training)
+str(training)
+```
+This dataset contains 156 potential predictors.The first seven variables are patient identifiers and are not pertinent to the analysis.
+
+#making all rows numeric
+all predictors are numeric but were not read in as such
+```{r}
+cols = c(-1,-2,-3,-4,-5,-6,-7,-160);    
+training[,cols] = apply(training[,cols], 2, function(x) as.numeric(as.character(x)))
+testing[,cols] = apply(testing[,cols], 2, function(x) as.numeric(as.character(x)))
+```
+based in the warning messages, its clear that we have missing values in the training set that we will need to deal with.
+Note: at this point we have already identified that 1:7 and 160 (our outcome) will not be used to train our model.
+
+#Near Zero Variance
+Next step in figuring out which variables to usee is to check for near zero variance.
+```{r}
+nzv <- nearZeroVar(training,saveMetrics=TRUE)
+```
+amplitude_yaw_belt, amplitude_yaw_dumbbell, amplitude_yaw_forearm will be excluded from further analysis due to near zero variance.
+Note: now we have identified that we will be excluding 1:7, 26, 101, 139
+
+#Too Many NAs
+some variables require imputation, but there others that have too many missing values to be useful. If more than 30% of the data points are missing, we will exclude them from model fitting.
+```{r}
+NA_percent <- function(x) {length(na.omit(x))/length(x)}
+NA_training <- c()
+NA_names <- names(training)
+for (i in 1:ncol(training)) {
+  test <- training[,i]
+  result <- NA_percent(test)
+  NA_training <- c(NA_training,result)
+}
+percents <- cbind(NA_names,NA_training)
+percents <- as.data.frame(percents)
+names_exclude <- percents[NA_training < .7,]
+names_exclude[,1] <- as.character(names_exclude[,1])
+names_exclude <- names_exclude[,1]
+names_exclude <- which(names(training) %in% names_exclude)
+names_exclude <- c(1:7,names_exclude,26,101,139)
+names_exclude <- unique(names_exclude)
+```
+now we have a vector names names_exclude that has the number corresponding to all columns we want to ignore during modelling. We have removed variables with excessive NAs, near zero variance, and those that are identifiers. Now we are ready to explore the rest of the variables more deeply to see if we can learn a bit more.
+
+#Feature Plotting
+lets start by checking out the first four predictors left, 8:11
+```{r}
+featurePlot(x=training[,c(8:11)],y=training$classe,plot="pairs")
+```
+error type E has large variance across all of the variables. 
+
+#Train and Validate set made
+```{r}
+train <- training[inTrain,c(-names_exclude)]
+validate <- training[-inTrain,c(-names_exclude)]
+test <- testing[,c(-names_exclude)]
+```
+at this point we have three sets of data. The base test set, the validation set which is a partition of the original training data, and the train data that will be used to make our models.
+
+#accuracy function
+I made my own accuracy function which compares the predicted and real outcomes
+```{r}
+accuracy <- function(x,y) {length(which(x==y))/length(x)}
+```
+
+#Centering and Scaling
+I want to have one set of data that is center and scaled in order to see how this changes the accuracy of our tests.
+```{r}
+preObj <- preProcess(train[,c(-53)],method=c("center","scale"))
+trainScale <- predict(preObj,train[,c(-53)])
+trainScale$classe <- train$classe
+validateScale <- predict(preObj,validate[,c(-53)])
+validateScale$classe <- validate$classe
+testScale <- predict(preObj,test[,c(-53)])
+testScale$problem_id <- test$problem_id
+```
+now there is a center and scaled data set of the 52 predictors of interest.
+
+#Predicting with a decision tree
+lets use a random forest to predict on the test set and check the accuracy. I am going to start on the unscaled predictors
+```{r}
+mod1 <- train(classe~.,method="rpart",data=train)
+pred1 <- predict(mod1,newdata=validate)
+accuracy(pred1,validate$classe)
+```
+a decision tree was 50% accurate at predicting the classe of the validate set, we can do better. lets try a decision tree on the scaled date, maybe there is a difference.
+
+```{r}
+mod7 <- train(train$classe~.,method="lda",data=train)
+pred7 <- predict(mod7,newdata=validate)
+accuracy(pred7,validate$classe)
+```
+0.70,  LDA without PCA had the highest accuracy
+
+#pre process with PCA
+```{r}
+prePCA <- preProcess(train[,c(-53)],method="pca")
+PCA5train <- predict(prePCA,newdata=train[,c(-53)])
+mod5 <- train(train$classe~.,method="rf",data=PCA5train)
+PCA5validate <- predict(prePCA,newdata=validate[,c(-53)])
+pred5 <- predict(mod5,newdata=PCA5validate)
+accuracy(pred5,validate$classe)
+```
+running a random forest prediction on PCA data, which excluded 9 variables, resulted in an accuracy of 0.97
+
+#Test Prediction
+Model 5 will be used to predict on the test set.
+```{r}
+PCA5test <- predict(prePCA,newdata=test[,c(-53)])
+pred_test1 <- predict(mod5,newdata=PCA5test)
+answers <- as.character(pred_test1)
+```
+
